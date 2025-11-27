@@ -800,10 +800,10 @@ def tensorrt_cmake_args():
 
 
 def tensorflow_cmake_args(images, library_paths):
-    backend_name = "tensorflow"
-    extra_args = []
-
-    return extra_args
+    return [
+        cmake_backend_enable("tensorflow", "TRITON_TENSORFLOW_PIP_INSTALL", True),
+        cmake_backend_enable("tensorflow", "TRITON_ENABLE_GPU", False),
+    ]
 
 
 def dali_cmake_args():
