@@ -1526,7 +1526,7 @@ ENV TRITON_CUDACRT_PATH=/usr/local/cuda/include \\
 ENV PYTHONPATH=/opt/tritonserver/backends/dali/wheel/dali:$PYTHONPATH
 """
 
-    if target_platform() not in ["igpu", "windows", "rhel"]:
+    if enable_gpu and target_platform() not in ["igpu", "windows", "rhel"]:
         repo_arch = "sbsa" if target_machine == "aarch64" else "x86_64"
         df += f"""
 RUN curl -o /tmp/cuda-keyring.deb \\
