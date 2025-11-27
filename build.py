@@ -561,7 +561,9 @@ def backend_cmake_args(images, components, be, install_dir, library_paths):
     if be == "onnxruntime":
         args = onnxruntime_cmake_args(images, library_paths)
     elif be == "openvino":
-        args = openvino_cmake_args()
+        args = openvino_cmake_args()    
+    elif be == "tensorflow":
+        args = tensorflow_cmake_args(images, library_paths)
     elif be == "python":
         args = python_cmake_args()
     elif be == "dali":
@@ -795,6 +797,13 @@ def tensorrt_cmake_args():
         )
 
     return cargs
+
+
+def tensorflow_cmake_args(images, library_paths):
+    backend_name = "tensorflow"
+    extra_args = []
+
+    return extra_args
 
 
 def dali_cmake_args():
@@ -2363,6 +2372,7 @@ def enable_all():
             "identity",
             "square",
             "repeat",
+            "tensorflow",
             "onnxruntime",
             "python",
             "dali",
@@ -3107,6 +3117,8 @@ if __name__ == "__main__":
             # If armnn_tflite backend, source from external repo for git clone
             if be == "armnn_tflite":
                 github_organization = "https://gitlab.com/arm-research/smarter/"
+            elif be == "tensorflow":
+                github_organization = "https://github.com/ksmaze"
             else:
                 github_organization = FLAGS.github_organization
 
