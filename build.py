@@ -2919,7 +2919,10 @@ if __name__ == "__main__":
     for be in FLAGS.backend:
         parts = be.split(":")
         if len(parts) == 1:
-            parts.append(default_repo_tag)
+            if parts[0] == "tensorflow":
+                parts.append("main")
+            else:
+                parts.append(default_repo_tag)
         log('backend "{}" at tag/branch "{}"'.format(parts[0], parts[1]))
         backends[parts[0]] = parts[1]
 
