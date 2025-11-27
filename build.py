@@ -662,7 +662,7 @@ def pytorch_cmake_args(images):
         cargs.append(
             cmake_backend_enable("pytorch", "TRITON_ENABLE_NVTX", FLAGS.enable_nvtx)
         )
-        if target_platform() == "igpu":
+        if not FLAGS.enable_gpu or target_platform() in ("igpu", "windows"):
             cargs.append(
                 cmake_backend_enable("pytorch", "TRITON_PYTORCH_NVSHMEM", False)
             )
@@ -1526,7 +1526,8 @@ ENV TRITON_CUDACRT_PATH=/usr/local/cuda/include \\
 ENV PYTHONPATH=/opt/tritonserver/backends/dali/wheel/dali:$PYTHONPATH
 """
 
-    if enable_gpu and target_platform() not in ["igpu", "windows", "rhel"]:
+    # Add nvshmem3-cuda-13 for pytorch backend
+    if "pytorch" in backends and FLAGS.enable_gpu and target_platform() not in ["igpu", "windows", "rhel"]:
         repo_arch = "sbsa" if target_machine == "aarch64" else "x86_64"
         df += f"""
 RUN curl -o /tmp/cuda-keyring.deb \\
