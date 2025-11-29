@@ -18,7 +18,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ksmaze/triton_cpu
+  IMAGE_NAME: ${{ github.repository_owner }}/triton_cpu
 
 jobs:
   build-and-push:
