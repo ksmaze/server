@@ -103,12 +103,6 @@ jobs:
 
       - name: Tag and push image
         run: |
-          # Find the built image (tritonserver with dev tag)
-          IMAGE_ID=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep tritonserver | head -n 1)
-          echo "Found image: $IMAGE_ID"
-          
-          # Tag and push to GHCR
-          docker tag "$IMAGE_ID" ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
+          docker tag tritonserver:latest ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
-          
           echo "Pushed: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}"
