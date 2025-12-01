@@ -98,6 +98,7 @@ jobs:
             --enable-cpu-metric \
             --backend ensemble \
             --backend tensorflow \
+            --backend python \
             --endpoint=grpc \
             --endpoint=http
 
