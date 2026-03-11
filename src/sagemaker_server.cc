@@ -1,4 +1,4 @@
-// Copyright 2021-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// Copyright 2021-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -23,7 +23,10 @@
 // OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 #include "sagemaker_server.h"
+
+#include <filesystem>
 
 namespace triton { namespace server {
 
@@ -182,10 +185,13 @@ SagemakerAPIServer::Handle(evhtp_request_t* req)
         if (action == "/invoke") {
           LOG_VERBOSE(1) << "SageMaker request: INVOKE MODEL";
 
-          if (sagemaker_models_list_.find(multi_model_name.c_str()) ==
-              sagemaker_models_list_.end()) {
-            evhtp_send_reply(req, EVHTP_RES_NOTFOUND); /* 404*/
-            return;
+          {
+            std::lock_guard<std::mutex> lock(models_list_mutex_);
+            if (sagemaker_models_list_.find(multi_model_name.c_str()) ==
+                sagemaker_models_list_.end()) {
+              evhtp_send_reply(req, EVHTP_RES_NOTFOUND); /* 404*/
+              return;
+            }
           }
           LOG_VERBOSE(1) << "SageMaker MME Custom Invoke Model Path";
 
@@ -286,6 +292,22 @@ SagemakerAPIServer::ParseSageMakerRequest(
       HTTP_RESPOND_IF_ERR(req, url.AsString(&url_string));
       LOG_VERBOSE(1) << "Received url: " << url_string.c_str();
     }
+  }
+
+  std::filesystem::path url_path(url_string);
+  url_path = std::filesystem::absolute(
+      url_path.lexically_normal());  // Normalize the path to remove any
+                                     // redundant components.
+  auto url_abspath = url_path.string();
+
+  if (url_abspath.find("/dev/") == 0 || url_abspath.find("/proc/") == 0 ||
+      url_abspath.find("/sys/") == 0) {
+    LOG_ERROR << "Invalid URL: " << url_string
+              << ". \"url\" property value cannot start with /dev/, /proc/, or "
+                 "/sys/."
+              << std::endl;
+    evhtp_send_reply(req, EVHTP_RES_BADREQ);
+    return;
   }
 
   if (action == "load") {
@@ -436,7 +458,8 @@ SagemakerAPIServer::SageMakerMMEHandleInfer(
       case DataCompressor::Type::GZIP: {
         decompressed_buffer = evbuffer_new();
         err = DataCompressor::DecompressData(
-            compression_type, req->buffer_in, decompressed_buffer);
+            compression_type, req->buffer_in, decompressed_buffer,
+            max_input_size_);
         break;
       }
       case DataCompressor::Type::UNKNOWN: {
@@ -646,6 +669,7 @@ SagemakerAPIServer::SageMakerMMEUnloadModel(
     target_model = model_name_hash;
   }
 
+  std::lock_guard<std::mutex> lock(models_list_mutex_);
   if (sagemaker_models_list_.find(model_name_hash) ==
       sagemaker_models_list_.end()) {
     LOG_VERBOSE(1) << "Model " << target_model << " with model hash "
@@ -730,7 +754,7 @@ SagemakerAPIServer::SageMakerMMEUnloadModel(
       server_.get(), repo_parent_path.c_str());
 
   if (unregister_err != nullptr) {
-    EVBufferAddErrorJson(req->buffer_out, unload_err);
+    EVBufferAddErrorJson(req->buffer_out, unregister_err);
     evhtp_send_reply(req, EVHTP_RES_BADREQ);
     LOG_ERROR << "Unable to unregister model repository for path: "
               << repo_parent_path << std::endl;
@@ -740,7 +764,6 @@ SagemakerAPIServer::SageMakerMMEUnloadModel(
 
   TRITONSERVER_ErrorDelete(unregister_err);
 
-  std::lock_guard<std::mutex> lock(models_list_mutex_);
   sagemaker_models_list_.erase(model_name_hash);
 }
 
@@ -887,11 +910,27 @@ SagemakerAPIServer::SageMakerMMELoadModel(
     evhtp_request_t* req,
     const std::unordered_map<std::string, std::string> parse_map)
 {
-  std::string repo_path = parse_map.at("url");
+  std::string url_string = parse_map.at("url");
   std::string model_name_hash = parse_map.at("model_name_hash");
   std::string target_model = parse_map.at("target_model");
 
-  /* Check subdirs for models and find ensemble model within the repo_path
+  std::filesystem::path url_path(url_string);
+  url_path = std::filesystem::absolute(
+      url_path.lexically_normal());  // Normalize the path to remove any
+                                     // redundant components.
+  std::string url_abspath = url_path.string();
+
+  if (url_abspath.find("/dev/") == 0 || url_abspath.find("/proc/") == 0 ||
+      url_abspath.find("/sys/") == 0) {
+    LOG_ERROR << "Invalid repository path: " << url_string
+              << ". \"url\" property of `parse_map`cannot start with /dev/, "
+                 "/proc/, or /sys/."
+              << std::endl;
+    evhtp_send_reply(req, EVHTP_RES_BADREQ);
+    return;
+  }
+
+  /* Check subdirs for models and find ensemble model within the url_abspath
    * If only 1 model, that will be selected as model_subdir
    * Else ensemble model directory is set as model_subdir
    */
@@ -900,7 +939,8 @@ SagemakerAPIServer::SageMakerMMELoadModel(
   int dir_count = 0;
   std::string model_subdir, ensemble_model_subdir;
 
-  if ((dir = opendir(repo_path.c_str())) != NULL) {
+  if ((dir = opendir(url_abspath.c_str())) != NULL) {
+    std::shared_ptr<DIR> dir_ptr{dir, closedir};
     while ((ent = readdir(dir)) != NULL) {
       if ((ent->d_type == DT_DIR) && (!strcmp(ent->d_name, ".") == 0) &&
           (!strcmp(ent->d_name, "..") == 0)) {
@@ -919,7 +959,7 @@ SagemakerAPIServer::SageMakerMMELoadModel(
 
       // Read the config.pbtxt file at each path, if available
       std::string ensemble_config_path =
-          repo_path + "/" + model_subdir + "/" + "config.pbtxt";
+          url_abspath + "/" + model_subdir + "/config.pbtxt";
       std::ifstream config_fstream(ensemble_config_path);
       std::stringstream ensemble_config_content;
 
@@ -950,7 +990,6 @@ SagemakerAPIServer::SageMakerMMELoadModel(
             << std::endl;
       }
     }
-    closedir(dir);
   }
 
   if (!strcmp(ensemble_model_subdir.c_str(), "") == 0) {
@@ -968,10 +1007,10 @@ SagemakerAPIServer::SageMakerMMELoadModel(
 
   std::string repo_parent_path, subdir, customer_subdir;
   RE2::FullMatch(
-      repo_path, model_path_regex_, &repo_parent_path, &subdir,
+      url_abspath, model_path_regex_, &repo_parent_path, &subdir,
       &customer_subdir);
 
-  std::string config_path = repo_path + "/config.pbtxt";
+  std::string config_path = url_abspath + "/config.pbtxt";
   struct stat buffer;
 
   /* If config.pbtxt is at repo root,
@@ -982,7 +1021,7 @@ SagemakerAPIServer::SageMakerMMELoadModel(
   if (stat(config_path.c_str(), &buffer) == 0) {
     model_subdir = subdir;
   } else {
-    repo_parent_path = repo_path;
+    repo_parent_path = url_abspath;
   }
 
   auto param = TRITONSERVER_ParameterNew(
